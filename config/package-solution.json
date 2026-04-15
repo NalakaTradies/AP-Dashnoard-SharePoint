@@ -1,0 +1,40 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/package-solution.schema.json",
+  "solution": {
+    "name": "ap-dashboard-client-side-solution",
+    "id": "64149041-2a61-4903-a343-8d6473ce61a5",
+    "version": "1.0.0.0",
+    "includeClientSideAssets": true,
+    "skipFeatureDeployment": true,
+    "isDomainIsolated": false,
+    "developer": {
+      "name": "",
+      "websiteUrl": "",
+      "privacyUrl": "",
+      "termsOfUseUrl": "",
+      "mpnId": "Undefined-1.22.2"
+    },
+    "metadata": {
+      "shortDescription": {
+        "default": "ap-dashboard description"
+      },
+      "longDescription": {
+        "default": "ap-dashboard description"
+      },
+      "screenshotPaths": [],
+      "videoUrl": "",
+      "categories": []
+    },
+    "features": [
+      {
+        "title": "ap-dashboard Feature",
+        "description": "The feature that activates elements of the ap-dashboard solution.",
+        "id": "bd8f1745-cf90-41cd-ad3a-b195587a9c5e",
+        "version": "1.0.0.0"
+      }
+    ]
+  },
+  "paths": {
+    "zippedPackage": "solution/ap-dashboard.sppkg"
+  }
+}
