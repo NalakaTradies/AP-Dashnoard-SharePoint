@@ -31,6 +31,15 @@ interface IInvoice {
   XeroInvoiceURL: { Url: string; Description: string } | string;
 }
 
+interface ILineItem {
+  LineItemNumber: string;
+  Description: string;
+  Quantity: number;
+  UnitAmount: number;
+  LineAmount: number;
+  InvoiceReference: { Title: string };
+}
+
 interface IClient {
   clientId: string;
   ClientName: string;
@@ -50,13 +59,15 @@ interface IMetrics {
 const today = new Date().toISOString().split('T')[0];
 
 export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.ReactElement => {
-  const [invoices, setInvoices]           = useState<IInvoice[]>([]);
-  const [clients, setClients]             = useState<IClient[]>([]);
-  const [metrics, setMetrics]             = useState<IMetrics | null>(null);
-  const [loading, setLoading]             = useState(true);
-  const [error, setError]                 = useState<string | null>(null);
-  const [lastRefresh, setLastRefresh]     = useState<string>('');
+  const [invoices, setInvoices]               = useState<IInvoice[]>([]);
+  const [clients, setClients]                 = useState<IClient[]>([]);
+  const [metrics, setMetrics]                 = useState<IMetrics | null>(null);
+  const [loading, setLoading]                 = useState(true);
+  const [error, setError]                     = useState<string | null>(null);
+  const [lastRefresh, setLastRefresh]         = useState<string>('');
   const [selectedInvoice, setSelectedInvoice] = useState<IInvoice | null>(null);
+  const [lineItems, setLineItems]             = useState<ILineItem[]>([]);
+  const [lineItemsLoading, setLineItemsLoading] = useState(false);
 
   const sp = spfi().using(SPFx(context));
 
@@ -102,6 +113,28 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
     }
   };
 
+  const fetchLineItems = async (referenceID: string): Promise<void> => {
+    try {
+      setLineItemsLoading(true);
+      const items = await sp.web.lists.getByTitle('InvoiceLineItems').items
+        .select('LineItemNumber','Description','Quantity','UnitAmount','LineAmount','InvoiceReference/Title')
+        .expand('InvoiceReference')
+        .filter(`InvoiceReference/Title eq '${referenceID}'`)
+        .top(100)();
+      setLineItems(items);
+    } catch {
+      setLineItems([]);
+    } finally {
+      setLineItemsLoading(false);
+    }
+  };
+
+  const openInvoice = (inv: IInvoice): void => {
+    setSelectedInvoice(inv);
+    setLineItems([]);
+    fetchLineItems(inv.ReferenceID).catch(console.error);
+  };
+
   useEffect(() => {
     // eslint-disable-next-line @typescript-eslint/no-floating-promises
     fetchData();
@@ -109,7 +142,7 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
     return () => clearInterval(interval);
   }, []);
 
-  const getClientRate = (clientId: string): number => {
+  const getClientRate  = (clientId: string): number => {
     const ci = invoices.filter(i => i.ClientID === clientId);
     if (ci.length === 0) return 0;
     return Math.round((ci.filter(i => i.ProcessingStatus === 'Completed').length / ci.length) * 100);
@@ -121,9 +154,9 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
 
   const attentionItems = invoices.filter(i => i.ProcessingStatus === 'Approval Pending').slice(0, 10);
 
-  const fmtDate  = (d: string): string => d ? new Date(d).toLocaleDateString('en-AU') : '—';
-  const fmtAmt   = (n: number): string => `$${(n || 0).toLocaleString('en-AU', { minimumFractionDigits: 2 })}`;
-  const xeroUrl  = (u: { Url: string; Description: string } | string | null | undefined): string => {
+  const fmtDate = (d: string): string => d ? new Date(d).toLocaleDateString('en-AU') : '—';
+  const fmtAmt  = (n: number): string => `$${(n || 0).toLocaleString('en-AU', { minimumFractionDigits: 2 })}`;
+  const xeroUrl = (u: { Url: string; Description: string } | string | null | undefined): string => {
     if (!u) return '';
     return typeof u === 'object' ? u.Url : u;
   };
@@ -194,6 +227,37 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
                   <div className={styles.modalValArea}>{selectedInvoice.InternalNote || '—'}</div>
                 </div>
               </div>
+
+              {/* LINE ITEMS */}
+              <div className={styles.liTitle}>Line items</div>
+              {lineItemsLoading
+                ? <div className={styles.liLoading}>Loading line items...</div>
+                : lineItems.length === 0
+                  ? <div className={styles.liEmpty}>No line items found</div>
+                  : (
+                    <table className={styles.liTbl}>
+                      <thead>
+                        <tr>
+                          <th>Description</th>
+                          <th>Quantity</th>
+                          <th>Unit amount</th>
+                          <th>Total amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {lineItems.map((li, idx) => (
+                          <tr key={idx}>
+                            <td>{li.Description || '—'}</td>
+                            <td>{li.Quantity ?? '—'}</td>
+                            <td>{fmtAmt(li.UnitAmount)}</td>
+                            <td>{fmtAmt(li.LineAmount)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )
+              }
+
               <div className={styles.modalActions}>
                 {selectedInvoice.BlobFilePath && (
                   <a href={selectedInvoice.BlobFilePath} target="_blank" rel="noreferrer" className={styles.modalBtn}>View file</a>
@@ -239,7 +303,7 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
           <div className={styles.mc}><div className={styles.mcLbl}>Completed</div><div className={styles.mcVal}>{metrics?.completed}</div><div className={styles.mcSub}>Posted to Xero</div></div>
         </div>
 
-        {/* ENTITY GRID — 2 rows visible, rest scrollable */}
+        {/* ENTITY GRID */}
         <div className={styles.sec}>All entities — live invoice status</div>
         <div className={styles.entGridWrap}>
           <div className={styles.entGrid}>
@@ -279,7 +343,7 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
                     <td>{fmtDate(inv.InvoiceDate)}</td>
                     <td>
                       <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                        <button className={styles.act} onClick={() => setSelectedInvoice(inv)}>View file</button>
+                        <button className={styles.act} onClick={() => openInvoice(inv)}>View file</button>
                         {xeroUrl(inv.XeroInvoiceURL)
                           ? <a href={xeroUrl(inv.XeroInvoiceURL)} target="_blank" rel="noreferrer" className={styles.actXero}>View in Xero</a>
                           : <span className={styles.actDisabled}>—</span>
@@ -298,9 +362,9 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
           <div className={styles.panel}>
             <div className={styles.panelTitle}>Invoice summary — all time</div>
             {[
-              ['Total invoices',               invoices.length],
-              ['Completed / posted to Xero',   invoices.filter(i => i.ProcessingStatus === 'Completed').length],
-              ['Pending approval',             invoices.filter(i => i.ProcessingStatus === 'Approval Pending').length],
+              ['Total invoices',             invoices.length],
+              ['Completed / posted to Xero', invoices.filter(i => i.ProcessingStatus === 'Completed').length],
+              ['Pending approval',           invoices.filter(i => i.ProcessingStatus === 'Approval Pending').length],
             ].map(([label, val]) => (
               <div key={label as string} className={styles.sr}>
                 <span className={styles.srName}>{label}</span>
@@ -311,7 +375,7 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
           <div className={styles.panel}>
             <div className={styles.panelTitle}>Processing rate by status</div>
             {[
-              { label: 'Completed',        count: invoices.filter(i => i.ProcessingStatus === 'Completed').length,       color: '#1B3A6B' },
+              { label: 'Completed',        count: invoices.filter(i => i.ProcessingStatus === 'Completed').length,        color: '#1B3A6B' },
               { label: 'Approval Pending', count: invoices.filter(i => i.ProcessingStatus === 'Approval Pending').length, color: '#BA7517' },
             ].map(({ label, count, color }) => {
               const pct = invoices.length > 0 ? Math.round((count / invoices.length) * 100) : 0;
