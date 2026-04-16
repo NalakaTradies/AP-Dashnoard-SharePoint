@@ -18,7 +18,15 @@ interface IInvoice {
   ProcessingStatus: string;
   SupplierName: string;
   TotalAmountIncGST: number;
+  TotalAmount: number;
+  TotalGST: number;
   InvoiceDate: string;
+  DueDate: string;
+  InvoiceNumber: string;
+  ABN: string;
+  CurrencyCode: string;
+  Comment: string;
+  InternalNote: string;
   BlobFilePath: string;
   XeroInvoiceURL: { Url: string; Description: string } | string;
 }
@@ -42,23 +50,25 @@ interface IMetrics {
 const today = new Date().toISOString().split('T')[0];
 
 export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.ReactElement => {
-  const [invoices, setInvoices]       = useState<IInvoice[]>([]);
-  const [clients, setClients]         = useState<IClient[]>([]);
-  const [metrics, setMetrics]         = useState<IMetrics | null>(null);
-  const [loading, setLoading]         = useState(true);
-  const [error, setError]             = useState<string | null>(null);
-  const [lastRefresh, setLastRefresh] = useState<string>('');
+  const [invoices, setInvoices]           = useState<IInvoice[]>([]);
+  const [clients, setClients]             = useState<IClient[]>([]);
+  const [metrics, setMetrics]             = useState<IMetrics | null>(null);
+  const [loading, setLoading]             = useState(true);
+  const [error, setError]                 = useState<string | null>(null);
+  const [lastRefresh, setLastRefresh]     = useState<string>('');
+  const [selectedInvoice, setSelectedInvoice] = useState<IInvoice | null>(null);
 
   const sp = spfi().using(SPFx(context));
 
   const fetchData = async (): Promise<void> => {
     try {
       setLoading(true);
-
       const [invoiceItems, clientItems] = await Promise.all([
         sp.web.lists.getByTitle('InvoiceData').items
           .select('ReferenceID','ClientID','ClientName','ProcessingStatus',
-                  'SupplierName','TotalAmountIncGST','InvoiceDate','BlobFilePath','XeroInvoiceURL')
+                  'SupplierName','TotalAmountIncGST','TotalAmount','TotalGST',
+                  'InvoiceDate','DueDate','InvoiceNumber','ABN','CurrencyCode',
+                  'Comment','InternalNote','BlobFilePath','XeroInvoiceURL')
           .top(500)(),
         sp.web.lists.getByTitle('Clients').items
           .select('clientId','ClientName','apEmailAddress','status')
@@ -68,15 +78,11 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
       setInvoices(invoiceItems);
       setClients(clientItems);
 
-      const todayInvoices = invoiceItems.filter(i =>
-        i.InvoiceDate && i.InvoiceDate.startsWith(today)
-      );
-      const completed    = invoiceItems.filter(i => i.ProcessingStatus === 'Completed');
-      const pending      = invoiceItems.filter(i => i.ProcessingStatus === 'Approval Pending');
-      const totalPending = pending.reduce((s, i) => s + (i.TotalAmountIncGST || 0), 0);
-      const rate         = invoiceItems.length > 0
-        ? Math.round((completed.length / invoiceItems.length) * 100)
-        : 0;
+      const todayInvoices = invoiceItems.filter(i => i.InvoiceDate && i.InvoiceDate.startsWith(today));
+      const completed     = invoiceItems.filter(i => i.ProcessingStatus === 'Completed');
+      const pending       = invoiceItems.filter(i => i.ProcessingStatus === 'Approval Pending');
+      const totalPending  = pending.reduce((s, i) => s + (i.TotalAmountIncGST || 0), 0);
+      const rate          = invoiceItems.length > 0 ? Math.round((completed.length / invoiceItems.length) * 100) : 0;
 
       setMetrics({
         totalEntities:     clientItems.length,
@@ -87,9 +93,7 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
         totalValuePending: totalPending,
       });
 
-      setLastRefresh(new Date().toLocaleTimeString('en-AU', {
-        hour: '2-digit', minute: '2-digit', timeZoneName: 'short'
-      }));
+      setLastRefresh(new Date().toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }));
       setError(null);
     } catch (e) {
       setError('Failed to load data. ' + (e as Error).message);
@@ -106,65 +110,117 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
   }, []);
 
   const getClientRate = (clientId: string): number => {
-    const clientInvoices = invoices.filter(i => i.ClientID === clientId);
-    if (clientInvoices.length === 0) return 0;
-    const done = clientInvoices.filter(i => i.ProcessingStatus === 'Completed').length;
-    return Math.round((done / clientInvoices.length) * 100);
+    const ci = invoices.filter(i => i.ClientID === clientId);
+    if (ci.length === 0) return 0;
+    return Math.round((ci.filter(i => i.ProcessingStatus === 'Completed').length / ci.length) * 100);
   };
 
-  const getClientStatusLabel = (rate: number): string => {
-    if (rate >= 85) return 'Completed';
-    if (rate >= 70) return 'In Progress';
-    return 'Pending';
+  const getClientStatusLabel = (rate: number): string => rate >= 85 ? 'Completed' : rate >= 70 ? 'In Progress' : 'Pending';
+  const getClientStatusClass  = (rate: number): string => rate >= 85 ? styles.sOk : rate >= 70 ? styles.sWarn : styles.sBlock;
+  const getBarColor           = (rate: number): string => rate >= 85 ? '#1B3A6B' : rate >= 70 ? '#BA7517' : '#A32D2D';
+
+  const attentionItems = invoices.filter(i => i.ProcessingStatus === 'Approval Pending').slice(0, 10);
+
+  const fmtDate  = (d: string): string => d ? new Date(d).toLocaleDateString('en-AU') : '—';
+  const fmtAmt   = (n: number): string => `$${(n || 0).toLocaleString('en-AU', { minimumFractionDigits: 2 })}`;
+  const xeroUrl  = (u: { Url: string; Description: string } | string | null | undefined): string => {
+    if (!u) return '';
+    return typeof u === 'object' ? u.Url : u;
   };
 
-  const getClientStatusClass = (rate: number): string => {
-    if (rate >= 85) return styles.sOk;
-    if (rate >= 70) return styles.sWarn;
-    return styles.sBlock;
-  };
-
-  const getBarColor = (rate: number): string => {
-    if (rate >= 85) return '#1B3A6B';
-    if (rate >= 70) return '#BA7517';
-    return '#A32D2D';
-  };
-
-  const attentionItems = invoices.filter(i =>
-    i.ProcessingStatus === 'Approval Pending'
-  ).slice(0, 10);
-
-  if (loading) return (
-    <div className={styles.loading}>
-      <div className={styles.spinner} />
-      <span>Loading AP Dashboard...</span>
-    </div>
-  );
-
-  if (error) return (
-    <div className={styles.error}>{error}</div>
-  );
+  if (loading) return (<div className={styles.loading}><div className={styles.spinner} /><span>Loading AP Dashboard...</span></div>);
+  if (error)   return (<div className={styles.error}>{error}</div>);
 
   return (
     <div className={styles.root}>
+
+      {/* INVOICE DETAIL MODAL */}
+      {selectedInvoice && (
+        <div className={styles.modalOverlay} onClick={() => setSelectedInvoice(null)}>
+          <div className={styles.modal} onClick={e => e.stopPropagation()}>
+            <div className={styles.modalHdr}>
+              <div className={styles.modalTitle}>Invoice Data</div>
+              <div className={styles.modalSub}>Verify the information below</div>
+              <button className={styles.modalClose} onClick={() => setSelectedInvoice(null)}>✕</button>
+            </div>
+            <div className={styles.modalBody}>
+              <div className={styles.modalGrid}>
+                <div className={styles.modalField}>
+                  <div className={styles.modalLabel}>Invoice number</div>
+                  <div className={styles.modalVal}>{selectedInvoice.InvoiceNumber || '—'}</div>
+                </div>
+                <div className={styles.modalField}>
+                  <div className={styles.modalLabel}>Supplier name</div>
+                  <div className={styles.modalVal}>{selectedInvoice.SupplierName || '—'}</div>
+                </div>
+                <div className={styles.modalField}>
+                  <div className={styles.modalLabel}>Processing status</div>
+                  <div className={styles.modalVal}><span className={`${styles.bdg} ${styles.bWarn}`}>{selectedInvoice.ProcessingStatus}</span></div>
+                </div>
+                <div className={styles.modalField}>
+                  <div className={styles.modalLabel}>ABN</div>
+                  <div className={styles.modalVal}>{selectedInvoice.ABN || '—'}</div>
+                </div>
+                <div className={styles.modalField}>
+                  <div className={styles.modalLabel}>Invoice date</div>
+                  <div className={styles.modalVal}>{fmtDate(selectedInvoice.InvoiceDate)}</div>
+                </div>
+                <div className={styles.modalField}>
+                  <div className={styles.modalLabel}>Due date</div>
+                  <div className={styles.modalVal}>{fmtDate(selectedInvoice.DueDate)}</div>
+                </div>
+                <div className={styles.modalField}>
+                  <div className={styles.modalLabel}>Total exc GST</div>
+                  <div className={styles.modalVal}>{fmtAmt(selectedInvoice.TotalAmount)}</div>
+                </div>
+                <div className={styles.modalField}>
+                  <div className={styles.modalLabel}>Total GST</div>
+                  <div className={styles.modalVal}>{fmtAmt(selectedInvoice.TotalGST)}</div>
+                </div>
+                <div className={styles.modalField}>
+                  <div className={styles.modalLabel}>Total inc GST</div>
+                  <div className={styles.modalVal}>{fmtAmt(selectedInvoice.TotalAmountIncGST)}</div>
+                </div>
+                <div className={styles.modalField}>
+                  <div className={styles.modalLabel}>Currency code</div>
+                  <div className={styles.modalVal}>{selectedInvoice.CurrencyCode || '—'}</div>
+                </div>
+                <div className={`${styles.modalField} ${styles.modalFullWidth}`}>
+                  <div className={styles.modalLabel}>Comment</div>
+                  <div className={styles.modalValArea}>{selectedInvoice.Comment || '—'}</div>
+                </div>
+                <div className={`${styles.modalField} ${styles.modalFullWidth}`}>
+                  <div className={styles.modalLabel}>Internal note</div>
+                  <div className={styles.modalValArea}>{selectedInvoice.InternalNote || '—'}</div>
+                </div>
+              </div>
+              <div className={styles.modalActions}>
+                {selectedInvoice.BlobFilePath && (
+                  <a href={selectedInvoice.BlobFilePath} target="_blank" rel="noreferrer" className={styles.modalBtn}>View file</a>
+                )}
+                {xeroUrl(selectedInvoice.XeroInvoiceURL) && (
+                  <a href={xeroUrl(selectedInvoice.XeroInvoiceURL)} target="_blank" rel="noreferrer" className={styles.modalBtnXero}>View in Xero</a>
+                )}
+                <button className={styles.modalBtnClose} onClick={() => setSelectedInvoice(null)}>Close</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* NAV */}
       <div className={styles.nav}>
         <span className={styles.navLogo}>Vanderbilt Equity</span>
         <span className={styles.navSep}>|</span>
         <span className={styles.navSite}>Managed AP Platform</span>
-        <div className={styles.navRight}>
-          <span className={styles.dot} />
-          Live · Auto-refreshes every 60s · Last updated {lastRefresh}
-        </div>
+        <div className={styles.navRight}><span className={styles.dot} />Live · Auto-refreshes every 60s · Last updated {lastRefresh}</div>
       </div>
 
       {/* HEADER */}
       <div className={styles.hdr}>
         <div>
           <div className={styles.hdrTitle}>AP Operations Dashboard</div>
-          <div className={styles.hdrSub}>
-            {metrics?.totalEntities} active entities · All Xero accounts connected · Real-time view
-          </div>
+          <div className={styles.hdrSub}>{metrics?.totalEntities} active entities · All Xero accounts connected · Real-time view</div>
         </div>
         <div className={styles.hdrDate}>
           {new Date().toLocaleDateString('en-AU', { weekday:'short', day:'numeric', month:'short', year:'numeric' })}
@@ -176,54 +232,32 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
 
         {/* METRICS */}
         <div className={styles.metrics}>
-          <div className={styles.mc}>
-            <div className={styles.mcLbl}>Active entities</div>
-            <div className={styles.mcVal}>{metrics?.totalEntities}</div>
-            <div className={styles.mcSub}>All Xero connected</div>
-          </div>
-          <div className={styles.mc}>
-            <div className={styles.mcLbl}>Invoices today</div>
-            <div className={styles.mcVal}>{metrics?.invoicesToday}</div>
-            <div className={styles.mcSub}>{metrics?.completed} completed</div>
-          </div>
-          <div className={styles.mc}>
-            <div className={styles.mcLbl}>Auto-process rate</div>
-            <div className={styles.mcVal}>{metrics?.autoProcessed}%</div>
-            <div className={styles.mcSub}>Target: 95%</div>
-          </div>
-          <div className={styles.mc}>
-            <div className={styles.mcLbl}>Pending approval</div>
-            <div className={styles.mcVal}>{metrics?.pendingApproval}</div>
-            <div className={styles.mcSub}>
-              ${metrics?.totalValuePending.toLocaleString('en-AU', { maximumFractionDigits: 0 })} total value
-            </div>
-          </div>
-          <div className={styles.mc}>
-            <div className={styles.mcLbl}>Completed</div>
-            <div className={styles.mcVal}>{metrics?.completed}</div>
-            <div className={styles.mcSub}>Posted to Xero</div>
-          </div>
+          <div className={styles.mc}><div className={styles.mcLbl}>Active entities</div><div className={styles.mcVal}>{metrics?.totalEntities}</div><div className={styles.mcSub}>All Xero connected</div></div>
+          <div className={styles.mc}><div className={styles.mcLbl}>Invoices today</div><div className={styles.mcVal}>{metrics?.invoicesToday}</div><div className={styles.mcSub}>{metrics?.completed} completed</div></div>
+          <div className={styles.mc}><div className={styles.mcLbl}>Auto-process rate</div><div className={styles.mcVal}>{metrics?.autoProcessed}%</div><div className={styles.mcSub}>Target: 95%</div></div>
+          <div className={styles.mc}><div className={styles.mcLbl}>Pending approval</div><div className={styles.mcVal}>{metrics?.pendingApproval}</div><div className={styles.mcSub}>${metrics?.totalValuePending.toLocaleString('en-AU', { maximumFractionDigits: 0 })} total value</div></div>
+          <div className={styles.mc}><div className={styles.mcLbl}>Completed</div><div className={styles.mcVal}>{metrics?.completed}</div><div className={styles.mcSub}>Posted to Xero</div></div>
         </div>
 
-        {/* ENTITY GRID */}
+        {/* ENTITY GRID — 2 rows visible, rest scrollable */}
         <div className={styles.sec}>All entities — live invoice status</div>
-        <div className={styles.entGrid}>
-          {clients.map(client => {
-            const rate  = getClientRate(client.clientId);
-            const color = getBarColor(rate);
-            const label = getClientStatusLabel(rate);
-            const cls   = getClientStatusClass(rate);
-            return (
-              <div key={client.clientId} className={styles.ent}>
-                <div className={styles.entName}>{client.ClientName}</div>
-                <div className={styles.entEmail}>{client.apEmailAddress}</div>
-                <div className={styles.barBg}>
-                  <div className={styles.barFill} style={{ width: `${rate}%`, background: color }} />
+        <div className={styles.entGridWrap}>
+          <div className={styles.entGrid}>
+            {clients.map(client => {
+              const rate  = getClientRate(client.clientId);
+              const color = getBarColor(rate);
+              const label = getClientStatusLabel(rate);
+              const cls   = getClientStatusClass(rate);
+              return (
+                <div key={client.clientId} className={styles.ent}>
+                  <div className={styles.entName}>{client.ClientName}</div>
+                  <div className={styles.entEmail}>{client.apEmailAddress}</div>
+                  <div className={styles.barBg}><div className={styles.barFill} style={{ width: `${rate}%`, background: color }} /></div>
+                  <div className={`${styles.entStatus} ${cls}`}>{label} — {rate}%</div>
                 </div>
-                <div className={`${styles.entStatus} ${cls}`}>{label} — {rate}%</div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
 
         {/* ATTENTION TABLE */}
@@ -231,14 +265,7 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
         <div className={styles.tblWrap}>
           <table className={styles.tbl}>
             <thead>
-              <tr>
-                <th>Entity</th>
-                <th>Status</th>
-                <th>Supplier</th>
-                <th>Amount</th>
-                <th>Invoice date</th>
-                <th>Action</th>
-              </tr>
+              <tr><th>Entity</th><th>Status</th><th>Supplier</th><th>Amount</th><th>Invoice date</th><th>Action</th></tr>
             </thead>
             <tbody>
               {attentionItems.length === 0
@@ -246,22 +273,15 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
                 : attentionItems.map(inv => (
                   <tr key={inv.ReferenceID}>
                     <td>{inv.ClientName}</td>
-                    <td>
-                      <span className={`${styles.bdg} ${styles.bWarn}`}>
-                        {inv.ProcessingStatus}
-                      </span>
-                    </td>
+                    <td><span className={`${styles.bdg} ${styles.bWarn}`}>{inv.ProcessingStatus}</span></td>
                     <td>{inv.SupplierName}</td>
-                    <td>${(inv.TotalAmountIncGST || 0).toLocaleString('en-AU', { minimumFractionDigits: 2 })}</td>
-                    <td>{inv.InvoiceDate ? new Date(inv.InvoiceDate).toLocaleDateString('en-AU') : '—'}</td>
+                    <td>{fmtAmt(inv.TotalAmountIncGST)}</td>
+                    <td>{fmtDate(inv.InvoiceDate)}</td>
                     <td>
                       <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                        {inv.BlobFilePath
-                          ? <a href={inv.BlobFilePath} target="_blank" rel="noreferrer" className={styles.act}>View file</a>
-                          : <span className={styles.actDisabled}>No file</span>
-                        }
-                        {inv.XeroInvoiceURL
-                          ? <a href={typeof inv.XeroInvoiceURL === 'object' ? inv.XeroInvoiceURL.Url : inv.XeroInvoiceURL} target="_blank" rel="noreferrer" className={styles.actXero}>View in Xero</a>
+                        <button className={styles.act} onClick={() => setSelectedInvoice(inv)}>View file</button>
+                        {xeroUrl(inv.XeroInvoiceURL)
+                          ? <a href={xeroUrl(inv.XeroInvoiceURL)} target="_blank" rel="noreferrer" className={styles.actXero}>View in Xero</a>
                           : <span className={styles.actDisabled}>—</span>
                         }
                       </div>
@@ -278,11 +298,9 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
           <div className={styles.panel}>
             <div className={styles.panelTitle}>Invoice summary — all time</div>
             {[
-              ['Total invoices', invoices.length],
-              ['Completed / posted to Xero', invoices.filter(i => i.ProcessingStatus === 'Completed').length],
-              ['Pending approval', invoices.filter(i => i.ProcessingStatus === 'Approval Pending').length],
-              ['In progress', invoices.filter(i => i.ProcessingStatus === 'In Progress').length],
-              ['New', invoices.filter(i => i.ProcessingStatus === 'New').length],
+              ['Total invoices',               invoices.length],
+              ['Completed / posted to Xero',   invoices.filter(i => i.ProcessingStatus === 'Completed').length],
+              ['Pending approval',             invoices.filter(i => i.ProcessingStatus === 'Approval Pending').length],
             ].map(([label, val]) => (
               <div key={label as string} className={styles.sr}>
                 <span className={styles.srName}>{label}</span>
@@ -293,21 +311,14 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
           <div className={styles.panel}>
             <div className={styles.panelTitle}>Processing rate by status</div>
             {[
-              { label: 'Completed', count: invoices.filter(i => i.ProcessingStatus === 'Completed').length, color: '#1B3A6B' },
-              { label: 'In Progress', count: invoices.filter(i => i.ProcessingStatus === 'In Progress').length, color: '#1B3A6B' },
+              { label: 'Completed',        count: invoices.filter(i => i.ProcessingStatus === 'Completed').length,       color: '#1B3A6B' },
               { label: 'Approval Pending', count: invoices.filter(i => i.ProcessingStatus === 'Approval Pending').length, color: '#BA7517' },
-              { label: 'New', count: invoices.filter(i => i.ProcessingStatus === 'New').length, color: '#1B3A6B' },
             ].map(({ label, count, color }) => {
               const pct = invoices.length > 0 ? Math.round((count / invoices.length) * 100) : 0;
               return (
                 <div key={label} className={styles.br}>
-                  <div className={styles.brLbl}>
-                    <span>{label}</span>
-                    <span className={styles.brVal}>{pct}% ({count})</span>
-                  </div>
-                  <div className={styles.barTrack}>
-                    <div className={styles.barInner} style={{ width: `${pct}%`, background: color }} />
-                  </div>
+                  <div className={styles.brLbl}><span>{label}</span><span className={styles.brVal}>{pct}% ({count})</span></div>
+                  <div className={styles.barTrack}><div className={styles.barInner} style={{ width: `${pct}%`, background: color }} /></div>
                 </div>
               );
             })}
@@ -316,7 +327,6 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
 
       </div>
 
-      {/* FOOTER */}
       <div className={styles.footer}>
         <span className={styles.fl}>Vanderbilt Equity · Managed AP Platform · Confidential</span>
         <span className={styles.fl}>Powered by Business Automation Service · businessautomationservice.com</span>
