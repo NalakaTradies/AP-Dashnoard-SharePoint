@@ -47,6 +47,8 @@
 .bWarn { background: #fef3c7; color: #856404; }
 .bBlock { background: #fde8e8; color: #c0392b; }
 .act { color: #1B3A6B; font-weight: 600; cursor: pointer; font-size: 12px; text-decoration: none; &:hover { text-decoration: underline; } }
+.actXero { color: #0F6E56; font-weight: 600; cursor: pointer; font-size: 12px; text-decoration: none; border: 1px solid #0F6E56; padding: 2px 8px; border-radius: 3px; &:hover { background: #e1f5ee; } }
+.actDisabled { color: #aaa; font-size: 12px; }
 
 .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
 .panel { background: #fff; border: 1px solid #e1dfdd; border-radius: 4px; padding: 16px; }

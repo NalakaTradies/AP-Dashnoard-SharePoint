@@ -20,6 +20,7 @@ interface IInvoice {
   TotalAmountIncGST: number;
   InvoiceDate: string;
   BlobFilePath: string;
+  XeroInvoiceURL: { Url: string; Description: string } | string;
 }
 
 interface IClient {
@@ -34,21 +35,18 @@ interface IMetrics {
   invoicesToday: number;
   autoProcessed: number;
   pendingApproval: number;
-  blocked: number;
   completed: number;
   totalValuePending: number;
 }
 
-
-
 const today = new Date().toISOString().split('T')[0];
 
 export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.ReactElement => {
-  const [invoices, setInvoices]     = useState<IInvoice[]>([]);
-  const [clients, setClients]       = useState<IClient[]>([]);
-  const [metrics, setMetrics]       = useState<IMetrics | null>(null);
-  const [loading, setLoading]       = useState(true);
-  const [error, setError]           = useState<string | null>(null);
+  const [invoices, setInvoices]       = useState<IInvoice[]>([]);
+  const [clients, setClients]         = useState<IClient[]>([]);
+  const [metrics, setMetrics]         = useState<IMetrics | null>(null);
+  const [loading, setLoading]         = useState(true);
+  const [error, setError]             = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<string>('');
 
   const sp = spfi().using(SPFx(context));
@@ -60,7 +58,7 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
       const [invoiceItems, clientItems] = await Promise.all([
         sp.web.lists.getByTitle('InvoiceData').items
           .select('ReferenceID','ClientID','ClientName','ProcessingStatus',
-                  'SupplierName','TotalAmountIncGST','InvoiceDate','BlobFilePath')
+                  'SupplierName','TotalAmountIncGST','InvoiceDate','BlobFilePath','XeroInvoiceURL')
           .top(500)(),
         sp.web.lists.getByTitle('Clients').items
           .select('clientId','ClientName','apEmailAddress','status')
@@ -73,21 +71,19 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
       const todayInvoices = invoiceItems.filter(i =>
         i.InvoiceDate && i.InvoiceDate.startsWith(today)
       );
-      const autoProcessed = invoiceItems.filter(i => i.ProcessingStatus === 'Completed');
-      const pending       = invoiceItems.filter(i => i.ProcessingStatus === 'Approval Pending');
-      const blocked       = invoiceItems.filter(i => i.ProcessingStatus === 'Blocked');
-      const totalPending  = pending.reduce((s, i) => s + (i.TotalAmountIncGST || 0), 0);
-      const rate          = invoiceItems.length > 0
-        ? Math.round((autoProcessed.length / invoiceItems.length) * 100)
+      const completed    = invoiceItems.filter(i => i.ProcessingStatus === 'Completed');
+      const pending      = invoiceItems.filter(i => i.ProcessingStatus === 'Approval Pending');
+      const totalPending = pending.reduce((s, i) => s + (i.TotalAmountIncGST || 0), 0);
+      const rate         = invoiceItems.length > 0
+        ? Math.round((completed.length / invoiceItems.length) * 100)
         : 0;
 
       setMetrics({
-        totalEntities:   clientItems.length,
-        invoicesToday:   todayInvoices.length,
-        autoProcessed:   rate,
-        pendingApproval: pending.length,
-        blocked:         blocked.length,
-        completed:       autoProcessed.length,
+        totalEntities:     clientItems.length,
+        invoicesToday:     todayInvoices.length,
+        autoProcessed:     rate,
+        pendingApproval:   pending.length,
+        completed:         completed.length,
         totalValuePending: totalPending,
       });
 
@@ -103,8 +99,10 @@ export const ApDashboard: React.FC<IApDashboardProps> = ({ context }): React.Rea
   };
 
   useEffect(() => {
-// eslint-disable-next-line @typescript-eslint/no-floating-promises
-fetchData();    const interval = setInterval(() => { fetchData().catch(console.error); }, 60000);    return () => clearInterval(interval);
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises
+    fetchData();
+    const interval = setInterval(() => { fetchData().catch(console.error); }, 60000);
+    return () => clearInterval(interval);
   }, []);
 
   const getClientRate = (clientId: string): number => {
@@ -115,9 +113,9 @@ fetchData();    const interval = setInterval(() => { fetchData().catch(console.e
   };
 
   const getClientStatusLabel = (rate: number): string => {
-    if (rate >= 85) return 'Processing';
-    if (rate >= 70) return 'Review';
-    return 'Blocked';
+    if (rate >= 85) return 'Completed';
+    if (rate >= 70) return 'In Progress';
+    return 'Pending';
   };
 
   const getClientStatusClass = (rate: number): string => {
@@ -133,7 +131,7 @@ fetchData();    const interval = setInterval(() => { fetchData().catch(console.e
   };
 
   const attentionItems = invoices.filter(i =>
-    i.ProcessingStatus === 'Blocked' || i.ProcessingStatus === 'Approval Pending'
+    i.ProcessingStatus === 'Approval Pending'
   ).slice(0, 10);
 
   if (loading) return (
@@ -186,7 +184,7 @@ fetchData();    const interval = setInterval(() => { fetchData().catch(console.e
           <div className={styles.mc}>
             <div className={styles.mcLbl}>Invoices today</div>
             <div className={styles.mcVal}>{metrics?.invoicesToday}</div>
-            <div className={styles.mcSub}>{metrics?.completed} auto-processed</div>
+            <div className={styles.mcSub}>{metrics?.completed} completed</div>
           </div>
           <div className={styles.mc}>
             <div className={styles.mcLbl}>Auto-process rate</div>
@@ -201,12 +199,9 @@ fetchData();    const interval = setInterval(() => { fetchData().catch(console.e
             </div>
           </div>
           <div className={styles.mc}>
-            <div className={styles.mcLbl}>Blocked</div>
-            <div className={styles.mcVal}>{metrics?.blocked}</div>
-            {metrics?.blocked && metrics.blocked > 0
-              ? <div className={styles.mcAlert}>Action required</div>
-              : <div className={styles.mcSub}>All clear</div>
-            }
+            <div className={styles.mcLbl}>Completed</div>
+            <div className={styles.mcVal}>{metrics?.completed}</div>
+            <div className={styles.mcSub}>Posted to Xero</div>
           </div>
         </div>
 
@@ -252,7 +247,7 @@ fetchData();    const interval = setInterval(() => { fetchData().catch(console.e
                   <tr key={inv.ReferenceID}>
                     <td>{inv.ClientName}</td>
                     <td>
-                      <span className={`${styles.bdg} ${inv.ProcessingStatus === 'Blocked' ? styles.bBlock : styles.bWarn}`}>
+                      <span className={`${styles.bdg} ${styles.bWarn}`}>
                         {inv.ProcessingStatus}
                       </span>
                     </td>
@@ -260,10 +255,16 @@ fetchData();    const interval = setInterval(() => { fetchData().catch(console.e
                     <td>${(inv.TotalAmountIncGST || 0).toLocaleString('en-AU', { minimumFractionDigits: 2 })}</td>
                     <td>{inv.InvoiceDate ? new Date(inv.InvoiceDate).toLocaleDateString('en-AU') : '—'}</td>
                     <td>
-                      {inv.BlobFilePath
-                        ? <a href={inv.BlobFilePath} target="_blank" rel="noreferrer" className={styles.act}>View</a>
-                        : <span className={styles.act}>Review</span>
-                      }
+                      <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                        {inv.BlobFilePath
+                          ? <a href={inv.BlobFilePath} target="_blank" rel="noreferrer" className={styles.act}>View file</a>
+                          : <span className={styles.actDisabled}>No file</span>
+                        }
+                        {inv.XeroInvoiceURL
+                          ? <a href={typeof inv.XeroInvoiceURL === 'object' ? inv.XeroInvoiceURL.Url : inv.XeroInvoiceURL} target="_blank" rel="noreferrer" className={styles.actXero}>View in Xero</a>
+                          : <span className={styles.actDisabled}>—</span>
+                        }
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -281,7 +282,6 @@ fetchData();    const interval = setInterval(() => { fetchData().catch(console.e
               ['Completed / posted to Xero', invoices.filter(i => i.ProcessingStatus === 'Completed').length],
               ['Pending approval', invoices.filter(i => i.ProcessingStatus === 'Approval Pending').length],
               ['In progress', invoices.filter(i => i.ProcessingStatus === 'In Progress').length],
-              ['Blocked', invoices.filter(i => i.ProcessingStatus === 'Blocked').length],
               ['New', invoices.filter(i => i.ProcessingStatus === 'New').length],
             ].map(([label, val]) => (
               <div key={label as string} className={styles.sr}>
@@ -297,7 +297,6 @@ fetchData();    const interval = setInterval(() => { fetchData().catch(console.e
               { label: 'In Progress', count: invoices.filter(i => i.ProcessingStatus === 'In Progress').length, color: '#1B3A6B' },
               { label: 'Approval Pending', count: invoices.filter(i => i.ProcessingStatus === 'Approval Pending').length, color: '#BA7517' },
               { label: 'New', count: invoices.filter(i => i.ProcessingStatus === 'New').length, color: '#1B3A6B' },
-              { label: 'Blocked', count: invoices.filter(i => i.ProcessingStatus === 'Blocked').length, color: '#A32D2D' },
             ].map(({ label, count, color }) => {
               const pct = invoices.length > 0 ? Math.round((count / invoices.length) * 100) : 0;
               return (
